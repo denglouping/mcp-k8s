@@ -5,18 +5,23 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"log"
-
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 )
 
+const (
+	sseMode   = "sse"
+	stdioMode = "stdio"
+)
+
 func main() {
-	kubeconfigPath := flag.String("kubeconfig", "", "Path to Kubernetes configuration file (uses default config if not specified)")
+	kubeconfigPath := flag.String("kubeconfig", "/root/.kube/config", "Path to Kubernetes configuration file (uses default config if not specified)")
+	mode := flag.String("mode", stdioMode, "Mode to run mcp server, sse or stdio)")
+	addr := flag.String("addr", "0.0.0.0:6216", "Addr to run in sse mode")
 	flag.Parse()
 
 	if kubeconfigPath == nil && *kubeconfigPath == "" {
@@ -25,7 +30,7 @@ func main() {
 
 	restConfig, err := clientcmd.BuildConfigFromFlags("", *kubeconfigPath)
 	if err != nil {
-		log.Fatalf("Error building kubeconfig: %v", err)
+		klog.Fatalf("Error building kubeconfig: %v", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(restConfig)
@@ -58,9 +63,9 @@ func main() {
 	s.AddTool(tool, helloHandler)
 	s.AddTool(podTool, newPodInspectHandler(clientset))
 	// Start the stdio server
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("Server error: %v\n", err)
-	}
+
+	startServer(*mode, *addr, s)
+
 }
 
 func newPodInspectHandler(clientset *kubernetes.Clientset) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -89,6 +94,20 @@ func newPodInspectHandler(clientset *kubernetes.Clientset) func(ctx context.Cont
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Pod %s in namespace %s not found", pod.Name, pod.Namespace)), nil
 	}
+}
+
+func startServer(mode string, addr string, s *server.MCPServer) {
+	if mode == sseMode {
+		sse := server.NewSSEServer(s)
+		if err := sse.Start(addr); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+		}
+	} else {
+		if err := server.ServeStdio(s); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+		}
+	}
+
 }
 
 func helloHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
